@@ -12,12 +12,12 @@ ReAct（Reasoning + Acting）是 Agent 的基础范式。LLM 在"思考→行动
                     生成最终回答 → 返回用户
 ```
 
-LangGraph 的 `create_react_agent` 把这个循环封装好了，你只需要提供 LLM + 工具列表。
+LangGraph 的 `create_agent` 把这个循环封装好了，你只需要提供 LLM + 工具列表。
 
 ## agent.py 结构
 
 ```python
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 import sys
 from pathlib import Path
@@ -35,7 +35,7 @@ def create_agent(tools):
         temperature=0.3,              # 工具调用场景，低温度更稳定
     )
 
-    agent = create_react_agent(
+    agent = create_agent(
         model=llm,
         tools=tools,
     )
@@ -56,7 +56,7 @@ def create_agent(tools):
 
 > `ChatOpenAI` 兼容 DeepSeek API 是因为 DeepSeek 的 API 协议和 OpenAI 一致。这是业界常见做法——用 OpenAI SDK 调兼容厂商。
 
-### create_react_agent
+### create_agent
 
 | 参数 | 类型 | 说明 |
 |---|---|---|
@@ -65,7 +65,7 @@ def create_agent(tools):
 
 ## Agent 的运行方式
 
-`create_react_agent` 返回的不是一个函数，而是一个**编译好的 LangGraph 图**。调用方式：
+`create_agent` 返回的不是一个函数，而是一个**编译好的 LangGraph 图**。调用方式：
 
 ```python
 # 方式一：invoke —— 同步执行，返回最终状态

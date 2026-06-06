@@ -22,49 +22,18 @@ print(f"\n嵌入模型加载完成,模型：{EMBEDDING_MODEL}")
 
 
 
-# =============== 文档导入 ============
-# 加载指定目录下所有.md文件
-loader = DirectoryLoader(
-    path=KNOWLEDGE_BASE_SOURCE_PATH,
-    glob="**/*.md",         # 递归匹配所有.md文件
-    loader_cls=TextLoader,  # 指定使用TextLoader加载纯文本
-    loader_kwargs={"encoding": "utf-8"}      # 写死utf-8读,自动不好用
-)
-documents = loader.load()
-# print("\n=-=-=-=-=-=-=-=检查总笔记数量(文档数):", len(documents), "\n")
-# print(f"\n=-=-=-=-=-=-=检查第一个文档内容:\n{documents[0]}")
+# ========== 共享的 splitter（模块级，main.py import 后可被增量更新复用）==========
 
-# full_text = "\n\n".join([doc.page_content for doc in documents])        # 保存全部笔记文档--已弃用，逐文件切块使用下方循环完成
-
-
-
-# ========= 文档切块逻辑 =============
-# md文档初步按标题切
 md_splitter = MarkdownHeaderTextSplitter(
     headers_to_split_on=[("##", "section")],
-    strip_headers=False,        #保留标题文本
+    strip_headers=False,        # 保留标题文本
 )
 
-all_chunks = []
-for doc in documents:
-    # 
-    chunks = md_splitter.split_text(doc.page_content)
-    # 把原始文件的 metadata（含 source 路径）回填到每个 chunk
-    for chunk in chunks:
-        chunk.metadata = doc.metadata.copy()
-    all_chunks.extend(chunks)
-# print('\n-------------all_chunks:',len(all_chunks))
-
-# 过长的块再用字符级切分器切2次
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=CHUNK_SIZE,
     chunk_overlap=CHUNK_OVERLAP,
-    separators=['\n\n', '\n', '。', '，', ' ', '']   # 这里需要运行后看结果进行优化
+    separators=['\n\n', '\n', '。', '，', ' ', ''],
 )
-# 兜底二次切分——RecursiveCharacterTextSplitter.split_documents 会自动保留 metadata
-final_chunks = text_splitter.split_documents(all_chunks)        # 对单标题内超长文本切分后的chunks
-# print('\n-------------final_chunks:',len(final_chunks))
-
 
 
 # ============= 构建向量库 ==============
@@ -74,9 +43,9 @@ def build_index(chunks, persist_dir):
         print(f"向量库已存在: {persist_dir}，跳过构建。如需重建请手动删除该目录。")
         return Chroma(embedding_function=embeddings, persist_directory=persist_dir)
     vectorstore = Chroma.from_documents(
-        documents=chunks,                   # 待入库的Document列表,此处为final_chunks
+        documents=chunks,                   # 待入库的Document列表
         embedding=embeddings,               # 载入嵌入模型
-        persist_directory=persist_dir       # 持久化目录，不传这个参数就是内存模式，进程结束就丢
+        persist_directory=persist_dir       # 持久化目录
     )
     return vectorstore
 
@@ -175,6 +144,28 @@ def retrieve(vectorstore, query, k=5):
     retriever = vectorstore.as_retriever(search_kwargs={"k":k})
     return retriever.invoke(query)
 
-# 测试期间使用全量构建方法，后期换成增量更新
+# ========== 全量建库入口（python src/rag.py 时执行）==========
 if __name__ == '__main__':
-    vectorstore = build_index(final_chunks, "./chroma_db")  
+    loader = DirectoryLoader(
+        path=KNOWLEDGE_BASE_SOURCE_PATH,
+        glob="**/*.md",
+        loader_cls=TextLoader,
+        loader_kwargs={"encoding": "utf-8"},
+    )
+    documents = loader.load()
+    print(f"加载笔记数量: {len(documents)}")
+
+    all_chunks = []
+    for doc in documents:
+        chunks = md_splitter.split_text(doc.page_content)
+        for chunk in chunks:
+            chunk.metadata = doc.metadata.copy()
+        all_chunks.extend(chunks)
+    print(f"标题切块后 chunk 数: {len(all_chunks)}")
+
+    final_chunks = text_splitter.split_documents(all_chunks)
+    print(f"长块二次切分后 chunk 数: {len(final_chunks)}")
+
+
+    # 全量建库，后期使用时改为增量
+    vectorstore = build_index(final_chunks, "./chroma_db")
