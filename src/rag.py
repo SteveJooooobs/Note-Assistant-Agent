@@ -31,7 +31,7 @@ loader = DirectoryLoader(
     loader_kwargs={"encoding": "utf-8"}      # 写死utf-8读,自动不好用
 )
 documents = loader.load()
-print("\n=-=-=-=-=-=-=-=检查总笔记数量(文档数):", len(documents), "\n")
+# print("\n=-=-=-=-=-=-=-=检查总笔记数量(文档数):", len(documents), "\n")
 # print(f"\n=-=-=-=-=-=-=检查第一个文档内容:\n{documents[0]}")
 
 # full_text = "\n\n".join([doc.page_content for doc in documents])        # 保存全部笔记文档--已弃用，逐文件切块使用下方循环完成
@@ -54,7 +54,7 @@ for doc in documents:
     for chunk in chunks:
         chunk.metadata = doc.metadata.copy()
     all_chunks.extend(chunks)
-print('\n-------------all_chunks:',len(all_chunks))
+# print('\n-------------all_chunks:',len(all_chunks))
 
 # 过长的块再用字符级切分器切2次
 text_splitter = RecursiveCharacterTextSplitter(
@@ -64,7 +64,7 @@ text_splitter = RecursiveCharacterTextSplitter(
 )
 # 兜底二次切分——RecursiveCharacterTextSplitter.split_documents 会自动保留 metadata
 final_chunks = text_splitter.split_documents(all_chunks)        # 对单标题内超长文本切分后的chunks
-print('\n-------------final_chunks:',len(final_chunks))
+# print('\n-------------final_chunks:',len(final_chunks))
 
 
 
@@ -177,8 +177,5 @@ def retrieve(vectorstore, query, k=5):
     return retriever.invoke(query)
 
 # 测试期间使用全量构建方法，后期换成增量更新
-vectorstore = build_index(final_chunks, "./chroma_db")  
-
-docs = retrieve(vectorstore, "RAG检索策略有哪些")
-for i, doc in enumerate(docs):
-      print(f"[chunk {i}] 长度={len(doc.page_content)} | {doc.page_content[:80]}...")
+if __name__ == '__main__':
+    vectorstore = build_index(final_chunks, "./chroma_db")  
