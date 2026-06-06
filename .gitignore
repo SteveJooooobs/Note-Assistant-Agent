@@ -1,7 +1,16 @@
+# 环境配置
 .env
+
+# python编译缓存文件
 __pycache__/
 *.pyc
 *.pyo
+
+# 向量库文件
 chroma_db/
+
+# 模型权重文件
 models/
+
+# IDE配置文件
 .vscode/
