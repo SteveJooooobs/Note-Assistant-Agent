@@ -81,4 +81,4 @@ python src/main.py
 | [项目阶段总结](docs/项目阶段总结.md) | 当前完成度与遗留项 |
 
 ## 作者
-Mjolnir[github:]
+Mjolnir[[github:](https://github.com/SteveJooooobs)]
