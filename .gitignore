@@ -14,3 +14,6 @@ models/
 
 # IDE配置文件
 .vscode/
+
+# 项目指导文件（仅本地使用）
+CLAUDE.md
