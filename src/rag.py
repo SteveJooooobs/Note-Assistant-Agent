@@ -36,6 +36,7 @@ text_splitter = RecursiveCharacterTextSplitter(
 )
 
 
+
 # ============= 构建向量库 ==============
 def build_index(chunks, persist_dir):
     """全量构建向量索引"""
@@ -145,9 +146,20 @@ def retrieve(vectorstore, query, k=5):
     return retriever.invoke(query)
 
 # ========== 全量建库入口（python src/rag.py 时执行）==========
-if __name__ == '__main__':
+def load_and_split_all(docs_dir):
+    """加载目录下所有 .md 文件并完成两级切块，返回 final_chunks
+
+    供 build_index / BM25 索引构建 / 增量更新 共用。
+    避免每次切换检索方式都重复加载和切块逻辑。
+
+    Args:
+        docs_dir: 笔记源目录路径
+
+    Returns:
+        经过两级切分的 Document 列表（MD 标题切块 → 长块字符兜底）
+    """
     loader = DirectoryLoader(
-        path=KNOWLEDGE_BASE_SOURCE_PATH,
+        path=docs_dir,
         glob="**/*.md",
         loader_cls=TextLoader,
         loader_kwargs={"encoding": "utf-8"},
@@ -166,6 +178,10 @@ if __name__ == '__main__':
     final_chunks = text_splitter.split_documents(all_chunks)
     print(f"长块二次切分后 chunk 数: {len(final_chunks)}")
 
+    return final_chunks
 
+
+if __name__ == '__main__':
+    final_chunks = load_and_split_all(KNOWLEDGE_BASE_SOURCE_PATH)
     # 全量建库，后期使用时改为增量
     vectorstore = build_index(final_chunks, "./chroma_db")
