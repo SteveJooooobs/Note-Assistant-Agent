@@ -240,6 +240,30 @@ def hybrid_retrieve(
     return result
 
 
+# ============ 表格辅助函数 ============
+
+
+def _visual_width(s: str) -> int:
+    """计算字符串在终端中的视觉宽度（中文全角=2，ASCII半角=1）
+
+    用于生成表格时对齐含中文的列，避免 Python 的 len() 把中文算成 1 列而导致错位。
+    """
+    return sum(2 if ord(c) > 127 else 1 for c in s)
+
+
+def _pad_visual(s: str, width: int) -> str:
+    """将字符串填充到指定的视觉宽度
+
+    Args:
+        s: 待填充的字符串
+        width: 目标视觉宽度
+
+    Returns:
+        填充后的字符串（右侧补空格）
+    """
+    return s + " " * max(0, width - _visual_width(s))
+
+
 # ============ 对比表格 ============
 
 
@@ -253,20 +277,22 @@ def build_comparison_table(
     对同一查询，收集三路检索召回的每篇文档，展示其在每种策略下的分数。
     文档未被某策略召回时显示 '-'。
 
+    列宽按视觉宽度对齐（中文全角=2，ASCII=1），确保终端显示不乱。
+
     Args:
         dense_results: 稠密检索结果列表 (Document, score)
         bm25_results: BM25 检索结果列表 (Document, score)
         hybrid_results: 混合检索结果列表 (Document, score)
 
     Returns:
-        格式化的对比表格字符串（纯文本，非 Markdown）
+        格式化的对比表格字符串
     """
 
     def doc_key(doc: Document) -> str:
         return doc.metadata.get("source", "") + "::" + doc.page_content[:80]
 
     # 收集所有唯一文档，记录每路得分
-    all_docs: dict[str, dict] = {}  # key -> {doc, dense, bm25, hybrid}
+    all_docs: dict[str, dict] = {}
 
     for doc, score in dense_results:
         key = doc_key(doc)
@@ -283,6 +309,9 @@ def build_comparison_table(
         all_docs.setdefault(key, {"doc": doc, "dense": None, "bm25": None, "hybrid": None})
         all_docs[key]["hybrid"] = score
 
+    if not all_docs:
+        return "\n【三种检索策略分数对比】未召回任何文档\n"
+
     # 按混合分降序排列（None 当 0 处理）
     sorted_items = sorted(
         all_docs.items(),
@@ -290,32 +319,52 @@ def build_comparison_table(
         reverse=True,
     )
 
-    # 构建表格
-    SEP = "─" * 68
-    COL_HDR = f"{'文档':<38} {'稠密检索':>8} {'BM25':>8} {'混合(RRF)':>8}"
+    # 列宽设定（视觉宽度）
+    COL_ID = 4       # " #  "
+    W_SRC = 40       # 文档名
+    W_DENSE = 10     # 稠密分
+    W_BM25 = 10      # BM25 分
+    W_HYBRID = 10    # 混合分
 
-    rows = []
-    for key, data in sorted_items:
+    SEP = "─" * (COL_ID + W_SRC + W_DENSE + W_BM25 + W_HYBRID + 6)
+
+    header = (
+        f"{' #':>{COL_ID}}"
+        f" | {_pad_visual('文档来源', W_SRC)}"
+        f" | {_pad_visual('稠密检索', W_DENSE)}"
+        f" | {_pad_visual('BM25', W_BM25)}"
+        f" | {_pad_visual('混合(RRF)', W_HYBRID)}"
+    )
+
+    div = (
+        f"{'---':>{COL_ID}}"
+        f" | {'---':>{W_SRC}}"
+        f" | {'---':>{W_DENSE}}"
+        f" | {'---':>{W_BM25}}"
+        f" | {'---':>{W_HYBRID}}"
+    )
+
+    rows = [header, div]
+
+    for rank, (key, data) in enumerate(sorted_items, 1):
         doc = data["doc"]
         src = doc.metadata.get("source", "未知来源")
-        # 只显示文件名，简洁
-        display_src = Path(src).name
+        display_src = Path(src).name  # 简洁：只显示文件名
 
         d = f"{data['dense']:.4f}" if data["dense"] is not None else "-"
         b = f"{data['bm25']:.4f}" if data["bm25"] is not None else "-"
         h = f"{data['hybrid']:.4f}" if data["hybrid"] is not None else "-"
 
-        rows.append(f"{display_src:<38} {d:>8} {b:>8} {h:>8}")
+        line = (
+            f"{f' {rank}':>{COL_ID}}"
+            f" | {_pad_visual(display_src, W_SRC)}"
+            f" | {_pad_visual(d, W_DENSE)}"
+            f" | {_pad_visual(b, W_BM25)}"
+            f" | {_pad_visual(h, W_HYBRID)}"
+        )
+        rows.append(line)
 
-    table = (
-        f"\n{'【三种检索策略分数对比】':^68}\n"
-        f"{SEP}\n"
-        f"{COL_HDR}\n"
-        f"{SEP}\n"
-        f"{chr(10).join(rows)}\n"
-        f"{SEP}\n"
-    )
-
+    table = f"\n{'【三种检索策略分数对比】':^{len(SEP)-4}}\n{SEP}\n" + "\n".join(rows) + f"\n{SEP}\n"
     return table
 
 
@@ -326,12 +375,10 @@ def unified_retrieve(
     query: str,
     k: int = 5,
 ) -> str:
-    """统一执行三种检索策略，返回对比表格 + 详细结果
+    """统一执行三种检索策略，返回对比表格
 
     同时运行稠密检索、BM25 稀疏检索和混合检索，
-    返回一个完整的格式化字符串：
-    1. 对比表格（所有文档在三种策略下的分数）
-    2. 按混合检索排序的详细结果（含文档内容片段）
+    只返回分数对比表格供用户快速比较，不返回文档具体内容。
 
     Args:
         vectorstore: Chroma 向量库实例
@@ -341,16 +388,13 @@ def unified_retrieve(
         k: 每种策略返回结果数量
 
     Returns:
-        完整的格式化结果字符串，包含对比表格和详细内容
+        三种检索策略的分数对比表格
     """
     dense_results = dense_retrieve(vectorstore, query, k)
     bm25_ret = bm25_retrieve(bm25, chunks, query, k)
     hybrid_results = hybrid_retrieve(vectorstore, bm25, chunks, query, k)
 
-    table = build_comparison_table(dense_results, bm25_ret, hybrid_results)
-    detail = format_results(hybrid_results, method_label="混合")
-
-    return f"{table}\n{detail}"
+    return build_comparison_table(dense_results, bm25_ret, hybrid_results)
 
 
 # ============ 结果格式化 ============
