@@ -22,3 +22,8 @@ EMBEDDING_MODEL = "./models/bge-base-zh-v1.5"
 KNOWLEDGE_BASE_SOURCE_PATH = "./notes_backup/personal_notes"
 # 向量知识库目录
 KNOWLEDGE_BASE_VECTOR_PATH = "./chroma_db"
+
+# BM25 索引持久化路径
+BM25_INDEX_PATH = "./chroma_db/bm25_index.pkl"
+# Chunks 持久化路径（BM25 检索时需要据索引位置反查 Document）
+CHUNKS_PATH = "./chroma_db/chunks.pkl"

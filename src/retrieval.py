@@ -1,24 +1,23 @@
 """检索方法模块：稠密检索、BM25 稀疏检索、混合检索
 
 职能边界：
-- 提供三种检索方法的核心逻辑，返回 List[Document]
+- 提供三种检索方法的核心逻辑，返回 List[Tuple[Document, score]]
 - 提供 BM25 索引的构建、持久化、加载
-- 返回结果给 tools.py 中的 @tool 薄壳做格式化后输出
+- 检索结果保留原始分数，供 tools.py 格式化后展示给用户
 - 不接触 @tool 装饰器，不接触 Agent
 """
 
 import pickle
 import jieba
+import sys
 from rank_bm25 import BM25Okapi
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
 
-
-# ============ BM25 索引持久化路径 ============
-# 和 ChromaDB 放在同一目录下，同生命周期
-BM25_INDEX_PATH = "./chroma_db/bm25_index.pkl"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from config import BM25_INDEX_PATH, CHUNKS_PATH
 
 
 # ============ 中文分词 ============
@@ -79,13 +78,49 @@ def load_bm25_index(path: str = BM25_INDEX_PATH) -> Optional[BM25Okapi]:
     return None
 
 
+def save_chunks(chunks: List[Document], path: str = CHUNKS_PATH):
+    """持久化 chunk 列表到磁盘
+
+    BM25 检索时需要通过索引位置反查 Document，必须和 BM25 索引搭配保存。
+
+    Args:
+        chunks: 经过两级切分的 Document 列表
+        path: 持久化路径
+    """
+    with open(path, "wb") as f:
+        pickle.dump(chunks, f)
+
+
+def load_chunks(path: str = CHUNKS_PATH) -> Optional[List[Document]]:
+    """从磁盘加载 chunk 列表
+
+    文件不存在时返回 None。
+
+    Args:
+        path: 持久化路径
+
+    Returns:
+        Document 列表，或 None（文件不存在时）
+    """
+    if Path(path).exists():
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    return None
+
+
+
+
+
 # ============ 检索方法 ============
 
-def dense_retrieve(vectorstore: Chroma, query: str, k: int = 5) -> List[Document]:
+def dense_retrieve(vectorstore: Chroma, query: str, k: int = 5) -> List[Tuple[Document, float]]:
     """稠密检索：基于语义相似度的向量检索
 
     将 query 用同一 embedding 模型转为向量，与库中所有 chunk 向量算余弦相似度，
-    返回最相似的 top-k 个 Document。
+    返回最相似的 top-k 个 Document 及其分数。
+
+    分数说明：ChromaDB 返回 L2 距离（越小越相关），
+    此处转为 0~1 相似度（越大越相关），公式：sim = 1 / (1 + distance)。
 
     Args:
         vectorstore: Chroma 向量库实例（已加载 embedding_function）
@@ -93,20 +128,25 @@ def dense_retrieve(vectorstore: Chroma, query: str, k: int = 5) -> List[Document
         k: 返回结果数量
 
     Returns:
-        按相似度降序排列的 Document 列表
+        按相似度降序排列的 (Document, score) 元组列表
     """
-    retriever = vectorstore.as_retriever(search_kwargs={"k": k})
-    return retriever.invoke(query)
+    docs_with_scores = vectorstore.similarity_search_with_score(query, k=k)
+    # similarity_search_with_score 返回 (Document, L2_distance)，
+    # 转为 (Document, 1/(1+distance)) 使分数在 (0,1] 且越大越相关
+    return [(doc, round(1.0 / (1.0 + score), 4)) for doc, score in docs_with_scores]
 
 
-def bm25_retrieve(bm25: BM25Okapi, chunks: List[Document], query: str, k: int = 5) -> List[Document]:
+def bm25_retrieve(bm25: BM25Okapi, chunks: List[Document], query: str, k: int = 5) -> List[Tuple[Document, float]]:
     """稀疏检索：基于 BM25 关键词匹配
 
     将 query 中文分词后，与索引中每个文档的词频做 BM25 打分，
-    返回分数最高的 top-k 个 Document。
+    返回分数最高的 top-k 个 Document 及其分数。
 
     BM25 适合精确关键词匹配场景（如产品名、型号），
     与稠密检索（语义匹配）互补。
+
+    分数说明：BM25 原始分数，越高越相关，范围通常 0~20+，
+    具体数值受语料大小、词频分布影响，横向对比同一次查询有意义。
 
     Args:
         bm25: BM25Okapi 索引实例
@@ -115,7 +155,7 @@ def bm25_retrieve(bm25: BM25Okapi, chunks: List[Document], query: str, k: int = 
         k: 返回结果数量
 
     Returns:
-        按 BM25 分数降序排列的 Document 列表
+        按 BM25 分数降序排列的 (Document, score) 元组列表
     """
     tokenized_query = _tokenize(query)
 
@@ -125,10 +165,10 @@ def bm25_retrieve(bm25: BM25Okapi, chunks: List[Document], query: str, k: int = 
     # 按分数排序，取 top-k（只返回分数 > 0 的真正匹配结果）
     indexed_scores = list(enumerate(scores))
     indexed_scores.sort(key=lambda x: x[1], reverse=True)
-    top_k_indices = [idx for idx, score in indexed_scores[:k] if score > 0]
+    top_k = [(idx, score) for idx, score in indexed_scores[:k] if score > 0]
 
-    # 按分数从高到低返回对应的 Document
-    return [chunks[i] for i in top_k_indices]
+    # 按分数从高到低返回 (Document, score) 元组
+    return [(chunks[idx], round(score, 4)) for idx, score in top_k]
 
 
 def hybrid_retrieve(
@@ -137,7 +177,7 @@ def hybrid_retrieve(
     chunks: List[Document],
     query: str,
     k: int = 5,
-) -> List[Document]:
+) -> List[Tuple[Document, float]]:
     """混合检索：稠密 + 稀疏结果用 RRF 融合
 
     同时调用 dense_retrieve 和 bm25_retrieve，然后用
@@ -151,6 +191,9 @@ def hybrid_retrieve(
     - 同时覆盖语义匹配和精确关键词匹配
     - 实现简单，效果稳定
 
+    分数说明：RRF 融合分，范围 0~2，越大越相关。
+    文档同时被稠密和 BM25 检索召回到较高位时得分最高。
+
     Args:
         vectorstore: Chroma 向量库实例
         bm25: BM25Okapi 索引实例
@@ -159,18 +202,19 @@ def hybrid_retrieve(
         k: 返回结果数量
 
     Returns:
-        RRF 融合后按分数降序排列的 Document 列表（已去重）
+        RRF 融合后按分数降序排列的 (Document, score) 元组列表（已去重）
     """
-    dense_results = dense_retrieve(vectorstore, query, k)
-    bm25_results = bm25_retrieve(bm25, chunks, query, k)
+    # dense_retrieve / bm25_retrieve 现在返回 List[Tuple[Document, float]]
+    # 这里只取 Document 用于 RRF 排序
+    dense_results = [doc for doc, _ in dense_retrieve(vectorstore, query, k)]
+    bm25_results = [doc for doc, _ in bm25_retrieve(bm25, chunks, query, k)]
 
     # 用文档内容哈希做去重标识
-    # 不直接用 source 路径，避免同一文件的不同 chunk 被误认为同一文档
     def doc_key(doc: Document) -> str:
         return doc.metadata.get("source", "") + "::" + doc.page_content[:80]
 
-    # RRF 打分：每个结果中 rank 越靠前，得分贡献越大
-    rrf_scores = {}
+    # RRF 打分
+    rrf_scores: dict[str, float] = {}
 
     for rank, doc in enumerate(dense_results):
         key = doc_key(doc)
@@ -181,15 +225,16 @@ def hybrid_retrieve(
         rrf_scores[key] = rrf_scores.get(key, 0) + 1.0 / (rank + 1)
 
     # 按 RRF 分数降序排列，取 top-k
-    sorted_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)[:k]
+    sorted_items = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:k]
+    top_keys = {item[0] for item in sorted_items}
 
-    # 按排序后的 key 从原始结果中取 Document，保持顺序
+    # 按排序后的 key 取 Document，拼上 RRF 分数返回
     seen = set()
-    result = []
+    result: List[Tuple[Document, float]] = []
     for doc in dense_results + bm25_results:
         key = doc_key(doc)
-        if key in sorted_keys and key not in seen:
-            result.append(doc)
+        if key in top_keys and key not in seen:
+            result.append((doc, round(rrf_scores[key], 4)))
             seen.add(key)
 
     return result
@@ -197,21 +242,30 @@ def hybrid_retrieve(
 
 # ============ 结果格式化 ============
 
-def format_results(docs: List[Document]) -> str:
-    """将 Document 列表格式化为可读字符串，供 @tool 返回给 Agent
+def format_results(
+    docs_with_scores: List[Tuple[Document, float]],
+    method_label: str = "",
+) -> str:
+    """将 (Document, score) 列表格式化为可读字符串，供 @tool 返回给 Agent
 
     Args:
-        docs: 检索返回的 Document 列表
+        docs_with_scores: 检索返回的 (Document, score) 元组列表
+        method_label: 检索方法名称，如"稠密""BM25""混合"，用于分数标注
 
     Returns:
-        格式化后的文本，包含序号、来源文件和内容片段
+        格式化后的文本，包含序号、来源文件、分数和内容片段
     """
-    if not docs:
+    if not docs_with_scores:
         return "未找到相关笔记。"
 
+    # 构建分数标签，如 "[稠密: 0.87]"
+    label_prefix = f"[{method_label}: " if method_label else "["
+
     results = []
-    for i, doc in enumerate(docs, 1):
+    for i, (doc, score) in enumerate(docs_with_scores, 1):
         source = doc.metadata.get("source", "未知来源")
-        results.append(f"【{i}】来源: {source}\n{doc.page_content}\n")
+        results.append(
+            f"【{i}】来源: {source}  {label_prefix}{score}]\n{doc.page_content}\n"
+        )
 
     return "\n".join(results)

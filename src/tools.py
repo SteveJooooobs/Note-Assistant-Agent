@@ -43,8 +43,8 @@ def get_tools(vectorstore, bm25_index: Optional[BM25Okapi] = None, chunks: Optio
             k: 返回结果数量，默认5
         """
         try:
-            docs = dense_retrieve(vectorstore, query, k)
-            return format_results(docs)
+            results = dense_retrieve(vectorstore, query, k)
+            return format_results(results, method_label="稠密")
         except Exception as e:
             return f"稠密检索失败: {str(e)}"
 
@@ -67,8 +67,8 @@ def get_tools(vectorstore, bm25_index: Optional[BM25Okapi] = None, chunks: Optio
         if bm25_index is None or chunks is None:
             return "BM25 索引未就绪，请确认已构建 BM25 索引后再使用。"
         try:
-            docs = bm25_retrieve(bm25_index, chunks, query, k)
-            return format_results(docs)
+            results = bm25_retrieve(bm25_index, chunks, query, k)
+            return format_results(results, method_label="BM25")
         except Exception as e:
             return f"BM25 检索失败: {str(e)}"
 
@@ -89,8 +89,8 @@ def get_tools(vectorstore, bm25_index: Optional[BM25Okapi] = None, chunks: Optio
         if bm25_index is None or chunks is None:
             return "混合检索需要 BM25 索引，请确认已构建后再使用。"
         try:
-            docs = hybrid_retrieve(vectorstore, bm25_index, chunks, query, k)
-            return format_results(docs)
+            results = hybrid_retrieve(vectorstore, bm25_index, chunks, query, k)
+            return format_results(results, method_label="混合")
         except Exception as e:
             return f"混合检索失败: {str(e)}"
 

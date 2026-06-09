@@ -6,7 +6,8 @@ from retrieval import (
     load_bm25_index,
     build_bm25_index,
     save_bm25_index,
-    BM25_INDEX_PATH,
+    load_chunks,
+    save_chunks,
 )
 from config import KNOWLEDGE_BASE_SOURCE_PATH
 
@@ -18,15 +19,17 @@ vectorstore = Chroma(
 
 # ========== BM25 索引：存在则加载，不存在则重建 ==========
 bm25_index = load_bm25_index()
-chunks = None  # BM25 检索时按索引位置取 Document，需要 chunks 列表
+chunks = load_chunks()  # BM25 检索需要 chunks 按索引取 Document
 
-if bm25_index is None:
-    print("BM25 索引未找到，正在加载笔记并构建索引（首次运行较慢）...")
+# 索引或 chunks 任一缺失都需要重建（避免 pickle 文件损坏或版本不一致）
+if bm25_index is None or chunks is None:
+    print("BM25 索引未找到或不完整，正在加载笔记并构建索引（首次运行较慢）...")
     final_chunks = rag.load_and_split_all(KNOWLEDGE_BASE_SOURCE_PATH)
     bm25_index = build_bm25_index(final_chunks)
     save_bm25_index(bm25_index)
+    save_chunks(final_chunks)
     chunks = final_chunks
-    print("BM25 索引已构建并持久化")
+    print("BM25 索引及 chunks 已构建并持久化")
 else:
     print("BM25 索引已就绪")
 
@@ -70,5 +73,5 @@ while True:
                 # 工具返回结果
                 elif msg_type == "tool":
                     preview = msg.content[:150].replace("\n", " ")
-                    print("\n=-=" * 5)
+                    print("=-=" * 5)
                     print(f"\n   → 结果: {preview}...")
