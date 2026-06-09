@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # 供 from retrieval import ... 解析
 from config import KNOWLEDGE_BASE_SOURCE_PATH
-from retrieval import dense_retrieve, bm25_retrieve, hybrid_retrieve, format_results
+from retrieval import dense_retrieve, bm25_retrieve, hybrid_retrieve, unified_retrieve, format_results
 
 
 def get_tools(vectorstore, bm25_index: Optional[BM25Okapi] = None, chunks: Optional[list[Document]] = None):
@@ -24,6 +24,28 @@ def get_tools(vectorstore, bm25_index: Optional[BM25Okapi] = None, chunks: Optio
         bm25_index: BM25Okapi 索引实例（BM25/混合检索需要）
         chunks: 原始 chunk 列表（BM25/混合检索时需要，用于按索引取 Document）
     """
+
+    @tool
+    def unified_retrieve_tool(query: str, k: int = 5) -> str:
+        """综合搜索个人笔记（同时使用稠密+BM25+混合三种策略），返回三种策略的分数对比表和检索结果。
+
+        当用户询问知识类问题时，优先使用此工具。
+        它会同时运行稠密检索、BM25 稀疏检索和混合检索三种策略，
+        以表格形式对比每篇文档在三种策略下的得分（'-' 表示未命中），
+        并返回检索到的笔记片段及来源文件。
+
+        如果你不确定该用哪种检索方式，使用此工具即可获得最全面的结果。
+
+        Args:
+            query: 用户的查询内容
+            k: 返回结果数量，默认5
+        """
+        if bm25_index is None or chunks is None:
+            return "综合检索需要 BM25 索引，请确认已构建后再使用。"
+        try:
+            return unified_retrieve(vectorstore, bm25_index, chunks, query, k)
+        except Exception as e:
+            return f"综合检索失败: {str(e)}"
 
     @tool
     def dense_retrieve_tool(query: str, k: int = 5) -> str:
@@ -158,6 +180,7 @@ def get_tools(vectorstore, bm25_index: Optional[BM25Okapi] = None, chunks: Optio
             return f"创建文件夹失败: {str(e)}"
 
     return [
+        unified_retrieve_tool,  # 综合检索放在第一位，作为默认检索工具
         hybrid_retrieve_tool,
         dense_retrieve_tool,
         bm25_retrieve_tool,

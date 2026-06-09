@@ -240,6 +240,119 @@ def hybrid_retrieve(
     return result
 
 
+# ============ 对比表格 ============
+
+
+def build_comparison_table(
+    dense_results: List[Tuple[Document, float]],
+    bm25_results: List[Tuple[Document, float]],
+    hybrid_results: List[Tuple[Document, float]],
+) -> str:
+    """构建三种检索策略的分数对比表格
+
+    对同一查询，收集三路检索召回的每篇文档，展示其在每种策略下的分数。
+    文档未被某策略召回时显示 '-'。
+
+    Args:
+        dense_results: 稠密检索结果列表 (Document, score)
+        bm25_results: BM25 检索结果列表 (Document, score)
+        hybrid_results: 混合检索结果列表 (Document, score)
+
+    Returns:
+        格式化的对比表格字符串（纯文本，非 Markdown）
+    """
+
+    def doc_key(doc: Document) -> str:
+        return doc.metadata.get("source", "") + "::" + doc.page_content[:80]
+
+    # 收集所有唯一文档，记录每路得分
+    all_docs: dict[str, dict] = {}  # key -> {doc, dense, bm25, hybrid}
+
+    for doc, score in dense_results:
+        key = doc_key(doc)
+        all_docs.setdefault(key, {"doc": doc, "dense": None, "bm25": None, "hybrid": None})
+        all_docs[key]["dense"] = score
+
+    for doc, score in bm25_results:
+        key = doc_key(doc)
+        all_docs.setdefault(key, {"doc": doc, "dense": None, "bm25": None, "hybrid": None})
+        all_docs[key]["bm25"] = score
+
+    for doc, score in hybrid_results:
+        key = doc_key(doc)
+        all_docs.setdefault(key, {"doc": doc, "dense": None, "bm25": None, "hybrid": None})
+        all_docs[key]["hybrid"] = score
+
+    # 按混合分降序排列（None 当 0 处理）
+    sorted_items = sorted(
+        all_docs.items(),
+        key=lambda x: x[1]["hybrid"] if x[1]["hybrid"] is not None else 0,
+        reverse=True,
+    )
+
+    # 构建表格
+    SEP = "─" * 68
+    COL_HDR = f"{'文档':<38} {'稠密检索':>8} {'BM25':>8} {'混合(RRF)':>8}"
+
+    rows = []
+    for key, data in sorted_items:
+        doc = data["doc"]
+        src = doc.metadata.get("source", "未知来源")
+        # 只显示文件名，简洁
+        display_src = Path(src).name
+
+        d = f"{data['dense']:.4f}" if data["dense"] is not None else "-"
+        b = f"{data['bm25']:.4f}" if data["bm25"] is not None else "-"
+        h = f"{data['hybrid']:.4f}" if data["hybrid"] is not None else "-"
+
+        rows.append(f"{display_src:<38} {d:>8} {b:>8} {h:>8}")
+
+    table = (
+        f"\n{'【三种检索策略分数对比】':^68}\n"
+        f"{SEP}\n"
+        f"{COL_HDR}\n"
+        f"{SEP}\n"
+        f"{chr(10).join(rows)}\n"
+        f"{SEP}\n"
+    )
+
+    return table
+
+
+def unified_retrieve(
+    vectorstore: Chroma,
+    bm25: BM25Okapi,
+    chunks: List[Document],
+    query: str,
+    k: int = 5,
+) -> str:
+    """统一执行三种检索策略，返回对比表格 + 详细结果
+
+    同时运行稠密检索、BM25 稀疏检索和混合检索，
+    返回一个完整的格式化字符串：
+    1. 对比表格（所有文档在三种策略下的分数）
+    2. 按混合检索排序的详细结果（含文档内容片段）
+
+    Args:
+        vectorstore: Chroma 向量库实例
+        bm25: BM25Okapi 索引实例
+        chunks: chunk 列表
+        query: 用户的查询
+        k: 每种策略返回结果数量
+
+    Returns:
+        完整的格式化结果字符串，包含对比表格和详细内容
+    """
+    dense_results = dense_retrieve(vectorstore, query, k)
+    bm25_ret = bm25_retrieve(bm25, chunks, query, k)
+    hybrid_results = hybrid_retrieve(vectorstore, bm25, chunks, query, k)
+
+    table = build_comparison_table(dense_results, bm25_ret, hybrid_results)
+    detail = format_results(hybrid_results, method_label="混合")
+
+    return f"{table}\n{detail}"
+
+
 # ============ 结果格式化 ============
 
 def format_results(

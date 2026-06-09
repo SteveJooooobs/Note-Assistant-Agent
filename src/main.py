@@ -72,6 +72,6 @@ while True:
 
                 # 工具返回结果
                 elif msg_type == "tool":
-                    preview = msg.content[:150].replace("\n", " ")
-                    print("=-=" * 5)
-                    print(f"\n   → 结果: {preview}...")
+                    print("\n" + "=" * 50)
+                    print(msg.content)
+                    print("=" * 50)
