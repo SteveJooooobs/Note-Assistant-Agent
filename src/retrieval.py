@@ -264,6 +264,25 @@ def _pad_visual(s: str, width: int) -> str:
     return s + " " * max(0, width - _visual_width(s))
 
 
+def _content_preview(content: str, max_chars: int = 20) -> str:
+    """提取内容前 max_chars 个字作为预览
+
+    取文档内容的前 max_chars 个字符（去除首尾空白），超长则追加 '...'。
+    用于在对比表格下方展示每篇文档的概要，帮助判断是否需要查看完整内容。
+
+    Args:
+        content: 文档正文
+        max_chars: 预览字符数，默认 20
+
+    Returns:
+        预览字符串
+    """
+    text = content.strip().replace("\n", " ")
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "..."
+
+
 # ============ 对比表格 ============
 
 
@@ -319,21 +338,25 @@ def build_comparison_table(
         reverse=True,
     )
 
-    # 列宽设定（视觉宽度）
+    # 列宽设定（视觉宽度，ASCII=1，中文=2）
     COL_ID = 4       # " #  "
     W_SRC = 40       # 文档名
     W_DENSE = 10     # 稠密分
     W_BM25 = 10      # BM25 分
     W_HYBRID = 10    # 混合分
+    # 总视觉宽度 = 列宽 + 4 个 " | " 分隔符（每个3视觉宽度）
+    TOTAL_W = COL_ID + W_SRC + W_DENSE + W_BM25 + W_HYBRID + 4 * 3
+    SEP = "-" * TOTAL_W
 
-    SEP = "─" * (COL_ID + W_SRC + W_DENSE + W_BM25 + W_HYBRID + 6)
+    def _col(content: str, width: int) -> str:
+        return _pad_visual(content, width)
 
     header = (
         f"{' #':>{COL_ID}}"
-        f" | {_pad_visual('文档来源', W_SRC)}"
-        f" | {_pad_visual('稠密检索', W_DENSE)}"
-        f" | {_pad_visual('BM25', W_BM25)}"
-        f" | {_pad_visual('混合(RRF)', W_HYBRID)}"
+        f" | {_col('文档来源', W_SRC)}"
+        f" | {_col('稠密检索', W_DENSE)}"
+        f" | {_col('BM25', W_BM25)}"
+        f" | {_col('混合(RRF)', W_HYBRID)}"
     )
 
     div = (
@@ -349,7 +372,7 @@ def build_comparison_table(
     for rank, (key, data) in enumerate(sorted_items, 1):
         doc = data["doc"]
         src = doc.metadata.get("source", "未知来源")
-        display_src = Path(src).name  # 简洁：只显示文件名
+        display_src = Path(src).name
 
         d = f"{data['dense']:.4f}" if data["dense"] is not None else "-"
         b = f"{data['bm25']:.4f}" if data["bm25"] is not None else "-"
@@ -357,15 +380,43 @@ def build_comparison_table(
 
         line = (
             f"{f' {rank}':>{COL_ID}}"
-            f" | {_pad_visual(display_src, W_SRC)}"
-            f" | {_pad_visual(d, W_DENSE)}"
-            f" | {_pad_visual(b, W_BM25)}"
-            f" | {_pad_visual(h, W_HYBRID)}"
+            f" | {_col(display_src, W_SRC)}"
+            f" | {_col(d, W_DENSE)}"
+            f" | {_col(b, W_BM25)}"
+            f" | {_col(h, W_HYBRID)}"
         )
         rows.append(line)
 
-    table = f"\n{'【三种检索策略分数对比】':^{len(SEP)-4}}\n{SEP}\n" + "\n".join(rows) + f"\n{SEP}\n"
-    return table
+    table = f"\n{'【三种检索策略分数对比】':^{TOTAL_W}}\n{SEP}\n" + "\n".join(rows) + f"\n{SEP}\n"
+
+    # ========== 内容预览（与表格行号对应） ==========
+    # " | " 分隔符 × 2 = 6，预览列宽 = 总宽 - 序号列 - 来源列 - 分隔符
+    W_PREVIEW = TOTAL_W - COL_ID - W_SRC - 6
+
+    preview_rows = [
+        "",
+        f"{'【内容预览】':^{TOTAL_W}}",
+        SEP,
+        f"{' #':>{COL_ID}}"
+        f" | {_col('来源文件', W_SRC)}"
+        f" | {_col('内容预览（前20字）', W_PREVIEW)}",
+        f"{'---':>{COL_ID}}"
+        f" | {'---':>{W_SRC}}"
+        f" | {'---':>{W_PREVIEW}}",
+    ]
+    for rank, (key, data) in enumerate(sorted_items, 1):
+        doc = data["doc"]
+        src = doc.metadata.get("source", "未知来源")
+        display_src = Path(src).name
+        preview = _content_preview(doc.page_content, max_chars=20)
+        preview_rows.append(
+            f"{f' {rank}':>{COL_ID}}"
+            f" | {_col(display_src, W_SRC)}"
+            f" | {_col(preview, W_PREVIEW)}"
+        )
+    preview_rows.append(SEP)
+
+    return table + "\n".join(preview_rows) + "\n"
 
 
 def unified_retrieve(
